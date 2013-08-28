@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <math.h>
 #include <time.h>
 
@@ -10,8 +11,9 @@
 #define MAX_CITIES 32768 
 
 #define SATISFIED 10000
-#define START_TEMP (avg_distance/8)
-#define DELTA_TEMP (avg_distance/1000000.0)
+#define MAX_PERTURBATIONS 20
+#define START_TEMP (avg_distance/10.0)
+#define DELTA_TEMP (.9999)
 
 //STRUCTS:
 typedef struct city {
@@ -41,11 +43,14 @@ void free_distances(void);
 int greedy(int *path, int len);
 int swap_closest(int *remaining, int num_remaining);
 void two_opt(int *path, int len);
+void two_opt2(int * path, int len);
 void anneal(int *path, int len);
 int anneal_accept(int new_dst, int old_dst, double temp);
 double change_temp(double old_temp);
 void two_opt_swap(int i, int j, int *path);
 int two_opt_dist(int old_dist, int i, int j, int *path, int len);
+void sig_handler(int sig);
+void install_sig_handlers(void);
 
 //STATIC VARIABLES:
 static city * cities[MAX_CITIES];
@@ -60,6 +65,7 @@ static int * best_path;
 static int use_anneal = 0;
 static int use_combo = 0;
 static int use_greedy = 0;
+static int repeat = 0;
 static int verbose = 0;
 static int debug = 0;
 
@@ -71,6 +77,8 @@ static char out_filename[WORD_MAX];
 int main (int argc, char * argv[]) {
     int * path;
     int dst, max_id;
+
+    install_sig_handlers();
 
     //Get command line options:
     get_options(argc, argv);
@@ -97,8 +105,8 @@ int main (int argc, char * argv[]) {
     avg_distance = calc_distances(max_id);
 
     //Print distances:
-//    if(debug)
-//        print_distances();
+    if(debug && num_cities < 2000)
+        print_distances();
 
     //Call greedy algorithm to get a good first approximation:
     if(verbose)
@@ -108,24 +116,20 @@ int main (int argc, char * argv[]) {
 
     //Call two-opt/anneal to make it better:
     if(!use_greedy) {
-        if(use_anneal) {
-            if(verbose)
-                printf("Calling anneal...\n");
-            anneal(path, num_cities);
-        }
-        else if (use_combo) {
-            if(verbose)
-                printf("Calling combo anneal...\n");
-            anneal(path, num_cities);
-            copy_array(path, best_path, num_cities);
-            two_opt(path, num_cities);
-        }
-        else{
-            if(verbose)
-                printf("Calling two-opt...\n");
-
-            two_opt(path, num_cities);
-        }
+        do {
+            if(use_anneal || use_combo) {
+                if(verbose)
+                    printf("Calling anneal...\n");
+                anneal(path, num_cities);
+            }
+            if(use_combo)
+                copy_array(path, best_path, num_cities);
+            if(!use_anneal) {
+                if(verbose)
+                    printf("Calling two-opt...\n");
+                two_opt2(path, num_cities);
+            }
+        } while(repeat);
     }
 
     //Print solution:
@@ -170,7 +174,7 @@ void brute_force(int start, int distance, int cur, int * remaining, int num_rema
 void get_options(int argc, char ** argv) {
     char opt;
 
-    while((opt = getopt(argc, argv, "acgi:vd")) != -1) {
+    while((opt = getopt(argc, argv, "acdf:rv")) != -1) {
         switch(opt) {
             case 'a':
                 use_anneal = 1;
@@ -181,11 +185,14 @@ void get_options(int argc, char ** argv) {
             case 'g':
                 use_greedy = 1;
                 break;
-            case 'i':
+            case 'f':
                 in_file = 1;
                 out_file = 1;
                 strncpy(in_filename, optarg, WORD_MAX);
                 snprintf(out_filename, WORD_MAX, "%s%s", in_filename, ".tour");
+                break;
+            case 'r':
+                repeat = 1;
                 break;
             case 'v':
                 verbose = 1;
@@ -195,17 +202,34 @@ void get_options(int argc, char ** argv) {
                 debug = 1;
                 break;
             default:
-                printf("Usage: %s -[vd]\n", argv[0]);
-                printf("\t-v: Verbose mode\n");
-                printf("\t-d: Debug mode\n");
+                printf("Usage: %s -[acgvd] -[f filename]\n", argv[0]);
+                printf("\t-Default: Two-opt algorithm\n");
+                printf("\t-a: Simulated anneal algorithm\n");
+                printf("\t-c: Combo - simulated anneal + two-opt algorithms\n");
+                printf("\t-d: Debug mode (lots of detailed messages)\n");
+                printf("\t-f filename: Use specified file as input/source file\n");
+                printf("\t-g: Greedy algorithm\n");
+                printf("\t-r: Repeat mode (repeatedly try algorithm until SIGTERM or SIGINT)\n");
+                printf("\t-v: Verbose mode (minor progress messages)\n");
                 exit(EXIT_SUCCESS);
         }
     }
 }
 
 void set_best(int distance, int * path) {
+    sigset_t set;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGINT);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+
+    if(verbose)
+        printf("New best path found: %d\n", distance);
     best_distance = distance;
     copy_array(best_path, path, num_cities);
+
+    sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 void swap(int i, int j, int * array) {
@@ -300,11 +324,7 @@ void print_solution(void) {
     else
         f = stdout;
 
-    if(verbose)
-        fprintf(f, "Best distance: %d\nPath:\n", best_distance);
-    else
-        fprintf(f, "%d\n", best_distance);
-
+    fprintf(f, "%d\n", best_distance);
     for(i=0; i<num_cities; i++) {
         fprintf(f, "%d\n", best_path[i]);
     }
@@ -418,6 +438,88 @@ void two_opt(int * path, int len) {
     }
 }
 
+
+void two_opt2(int * path, int len) {
+    int i, j, dst, swp_dst, change, best_change, cnt, best_cnt, max_perturbations;
+    double temp;
+    
+    //Get the current path's distance:
+    dst = calc_path_dist(path, len);
+
+    cnt = 0;
+    best_cnt = 0;
+    temp = 0.01;
+    max_perturbations = 200;
+
+    do {
+        change = 0;
+        best_change = 0;
+
+        //Iterate through endpoints to be swapped:
+        for(i=1; i<len; i++) {
+            for(j=i; j<len; j++) {
+
+                //Get the path distance after the tentative two-opt swap:
+                swp_dst = two_opt_dist(dst, i, j, path, len);
+
+                //Check to see whether the new distance is acceptable:
+                if(anneal_accept(swp_dst, dst, temp)) {
+
+                    //Print debug information:
+                    if(debug) {
+                        printf("Two-opt2: temp: %f, old path: %d, new path : %d", temp, dst, swp_dst);
+                        if(swp_dst > dst) 
+                            printf("\t < up");
+                        printf("\n");
+                    }
+
+                    //Make the swap:
+                    two_opt_swap(i, j, path);
+                    dst = swp_dst;
+                    change = 1;
+
+   
+                    //If necessary, update the running best path/distance:
+                    if(dst < best_distance) {
+                        set_best(dst, path);
+                        best_change = 1;
+                        best_cnt=0;
+                        cnt = 0;
+                        i=0;
+                        break;
+                    }
+
+
+                    if(swp_dst > dst)
+                        cnt++;
+
+                    if(cnt > max_perturbations) {
+                        printf("Max perturbations reached: %d\n", max_perturbations);
+                        max_perturbations++;
+                        temp = 0.01;
+                    }
+                }
+            }
+        }
+
+        //Increment the termination counter if there's been no worthwhile change
+        //in the best path found throughout the entire last loop:
+        if(!best_change) {
+            best_cnt++;
+        }
+
+        //Boost the temperature if there was no change throughout the entire last loop:
+        if(!change) {
+            temp = START_TEMP;
+            cnt = 0;
+        }
+        else {
+            temp = .01;
+        }
+    } while(best_cnt<SATISFIED);
+}
+
+
 void anneal(int * path, int len) {
     int i, j, dst, swp_dst, attempt;
     double temp;
@@ -475,9 +577,9 @@ int anneal_accept(int new_dst, int old_dst, double temp) {
     if(new_dst == old_dst)
         return 0;
 
-    prob = exp(-(new_dst - old_dst)/temp);
+    prob = exp((old_dst - new_dst)/temp);
+    q = rand() / (double) RAND_MAX;
 
-    q = rand()/ (double) RAND_MAX;
     if(q < prob)
         return 1;
     else
@@ -485,8 +587,8 @@ int anneal_accept(int new_dst, int old_dst, double temp) {
 }
 
 double change_temp(double old_temp) {
-    if(old_temp > DELTA_TEMP) {
-        return old_temp - DELTA_TEMP;
+    if(old_temp > .01) {
+        return old_temp*DELTA_TEMP;
     }
     return old_temp;
 }
@@ -513,4 +615,21 @@ int two_opt_dist(int old_dist, int i, int j, int * path, int len) {
 }
 
 
+void sig_handler(int sig) {
+    if(verbose)
+        printf("Received signal %d: exiting...\n", sig);
+    print_solution();
+    exit(EXIT_SUCCESS);
+}
+
+void install_sig_handlers(void) {
+    struct sigaction siga;
+
+    siga.sa_handler = sig_handler;
+    sigemptyset(&siga.sa_mask);
+    siga.sa_flags = 0;
+
+    sigaction(SIGTERM, &siga, NULL);
+    sigaction(SIGINT, &siga, NULL);
+}
 
