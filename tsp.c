@@ -27,7 +27,7 @@
 #define WORD_MAX 64
 #define MAX_CITIES 32768 
 
-//Control values for anneal/nathans_algorithm:
+//Control values for anneal/hybrid algorithm:
 #define SATISFIED 10000
 #define START_TEMP (avg_distance/40.0)
 #define END_TEMP (avg_distance/10.0)
@@ -68,7 +68,7 @@ void free_distances(void);
 void nearest_neighbor(int *path, int len);
 int swap_closest(int *remaining, int num_remaining);
 void two_opt(int *path, int len);
-void nathans_algorithm(int * path, int len);
+void hybrid(int * path, int len);
 void anneal(int *path, int len);
 int anneal_accept(int new_dst, int old_dst, double temp);
 double change_temp(double old_temp);
@@ -158,11 +158,11 @@ int main (int argc, char * argv[]) {
             two_opt(path, num_cities);
         }
 
-        //Default: Nathan's Algorithm 
+        //Default: Hybrid algorithm 
         else {
             if(verbose)
-                printf("Calling Nathan's algorithm...\n");
-            nathans_algorithm(path, num_cities);
+                printf("Calling hybrid algorithm...\n");
+            hybrid(path, num_cities);
         }
     }
 
@@ -395,7 +395,7 @@ double change_temp(double old_temp) {
  * Param:   int len -  The length of the path
  * Return:  void -  The resulting path is left in the location specified by the path pointer
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-void nathans_algorithm(int * path, int len) {
+void hybrid(int * path, int len) {
     int i, j, dst, swp_dst, change, best_change, term_cnt;
     double temp;
     
@@ -422,7 +422,7 @@ void nathans_algorithm(int * path, int len) {
 
                     //Print debug information:
                     if(debug) {
-                        printf("Two-opt2: temp: %f, old path: %d, new path : %d", temp, dst, swp_dst);
+                        printf("Hybrid: temp: %f, old path: %d, new path : %d", temp, dst, swp_dst);
                         if(swp_dst > dst) 
                             printf("\t < up");
                         printf("\n");
@@ -584,7 +584,7 @@ void get_options(int argc, char ** argv) {
             default:
                 printf("Usage: %s -[adntv] -[f filename]\n", argv[0]);
                 printf("Algorithms:\n");
-                printf("\t-Default: Nathan's (honestly the best choice)\n");
+                printf("\t-Default: Nathan's Hybrid (honestly the best choice)\n");
                 printf("\t-n: Nearest Neighbor (only)\n");
                 printf("\t-t: Two-opt\n");
                 printf("\t-a: Simulated Anneal\n");
