@@ -3,7 +3,7 @@ tsp
 
 Includes a variety of heuristic algorithms for solving the Travelling Salesperson Problem: nearest neighbor, 2-opt, simulated anneal, and a hybrid of 2-opt and simumlated anneal.
 
-These algorithms all operate on x and y coordinates for cities located in a Euclidean plane.  Distances between cities therefore satisfy the triangle inequality.
+This program solves cases of the Euclidean TSP.  In other words, these algorithms all operate on x and y coordinates  that specify the locations of cities in a Euclidean plane.  Distances between cities therefore satisfy the triangle inequality, making this a special case of the metric TSP.
 
 #### Compilation:
 `make tsp`
